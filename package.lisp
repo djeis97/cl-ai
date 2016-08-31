@@ -1,5 +1,5 @@
 ;;;; package.lisp
 
 (defpackage #:cl-ai
-  (:use #:cl))
+  (:use #:cl #:cl-ana #:rutilsx))
 
