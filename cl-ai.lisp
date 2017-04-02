@@ -1,29 +1,28 @@
 ;;;; cl-ai.lisp
 
 (in-package #:cl-ai)
+(named-readtables:in-readtable rutilsx-readtable)
 
 ;;; "cl-ai" goes here. Hacks and glory await!
 
-(defsetf smart-slot-value (object slot-name) (val)
-  (alexandria:with-gensyms (slot-sym)
-    (alexandria:once-only (object slot-name)
-      `(let ((,slot-sym (or (find-symbol (string-upcase ,slot-name)
-                                    (symbol-package (class-name (class-of ,object))))
-                       ,slot-name)))
-         (setf (slot-value ,object ,slot-sym) ,val)))))
+(defpar *training-factor* 0.001)
+(defpar *alpha* 0.0001)
 
 (defclass gate ()
   ((last-output :accessor gate-last-output)
    (last-gradient :accessor gate-last-gradient)
-   (input-dims :accessor gate-input-dims)
-   (output-dims :accessor gate-output-dims))) ;; ABS for gates
+   (input-spec :accessor gate-input-spec :initarg :input-spec)
+   (output-spec :accessor gate-output-spec :initarg :output-spec))) ;; ABS for gates
 (defgeneric process (gate inp))
 (defgeneric train (gate output-gradient))
 
 
 (defclass multiply-gate (gate)
-  ((input-dims :initform '(2))
-   (output-dims :initform '(1))))
+  ()
+  (:default-initargs
+   :input-spec '(number number)
+   :output-spec '(number)))
+
 (defmethod process ((gate multiply-gate) inp)
   (bind (((x y) inp)
          (output (* x y))
@@ -34,8 +33,10 @@
 (defmethod train ((gate multiply-gate) output-gradient))
 
 (defclass add-gate (gate)
-  ((input-dims :initform '(2))
-   (output-dims :initform '(1))))
+  ()
+  (:default-initargs
+   :input-spec '(number number)
+   :output-spec '(number)))
 (defmethod process ((gate add-gate) inp)
   (bind (((x y) inp)
          (output (+ x y))
@@ -46,10 +47,14 @@
 (defmethod train ((gate add-gate) output-gradient))
 
 (defclass add-mul-circuit (gate)
-  ((input-dims :initform '(3))
-   (output-dims :initform '(1))
-   (add-gate :initform (make-instance 'add-gate))
-   (multiply-gate :initform (make-instance 'multiply-gate))))
+  ((add-gate :initarg :add-gate)
+   (multiply-gate :initarg :multiply-gate))
+  (:default-initargs
+   :input-spec '(number number number)
+   :output-spec '(number)
+   :add-gate (make-instance 'add-gate)
+   :multiply-gate (make-instance 'multiply-gate)))
+
 (defmethod process ((gate add-mul-circuit) inp)
   (bind (((x y z) inp)
          (added (process (? gate :add-gate) (list x y)))
@@ -65,4 +70,58 @@
                                       deriv-outp-wrt-z)
         (? gate :last-output) outp)
     outp))
+(defmethod train ((gate add-mul-circuit) output-gradient))
 
+(declaim (inline vector-dot-product))
+(defun vector-dot-product (a b)
+  (declare (vector a b)
+           (optimize (speed 3)))
+  (loop :for a-val :being :the :elements :of a
+        :for b-val :being :the :elements :of b
+        :sum (* a-val b-val)))
+
+(defclass support-vector-machine (gate)
+  ((weights :initarg :weights)
+   (bias :initarg :bias)
+   weights-gradient)
+  (:default-initargs
+   :weights (vector 0 0)
+   :bias 0
+   :input-spec '((simple-vector 2))
+   :output-spec '(number)))
+(defmethod process ((gate support-vector-machine) inp)
+  (bind ((outp (+ (vector-dot-product (car inp)
+                                      (? gate :weights))
+                   (? gate :bias))))
+    (:= (? gate :last-gradient) (? gate :weights)
+        (? gate :weights-gradient) (car inp)
+        (? gate :last-output) outp)
+    outp))
+(defmethod train ((gate support-vector-machine) output-gradient)
+  (bind ((grad (car output-gradient))
+         (bias (? gate :bias))
+         (weights (? gate :weights))
+         (weights-gradient (cl-ana.gmath:* *training-factor*
+                                           grad
+                                           (? gate :weights-gradient)))
+         (normalization (cl-ana.gmath:* *alpha* -1 weights)))
+    (:= (? gate :weights) (cl-ana.gmath:+
+                              weights
+                              weights-gradient
+                              normalization)
+        (? gate :bias) (+ bias (* *training-factor* grad)))
+    (cl-ana.gmath:* grad (? gate :last-gradient))))
+
+
+(defun train-gate (gate data)
+  (reduce #'cl-ana.gmath:+ (mapcar #`(bind ((inp (car %))
+                                            (exp (cdr %))
+                                            (outp (process gate inp))
+                                            (err (cl-ana.gmath:- exp outp)))
+                                       (train gate err)
+                                       (cl-ana.tensor:tensor-map #'abs err))
+                                   data)))
+(defun test-gate (gate data)
+  (values (mapcar #`(process gate (car %))
+                  data)
+          (mapcar #'second data)))
