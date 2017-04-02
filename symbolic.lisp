@@ -179,7 +179,6 @@
         (unary-div (run-internal (car inputs) env cache)))))
 
 (defmethod gradient-internal ((a division) b env cache)
-  (reduce #'
-   ))
+  (reduce #'div (slot-value s 'inputs) :key (lambda (i) (gradient-internal i b env cache))))
 
 ;; (+ (* (run a) (gradient v b)) (* (run b) (gradient v a)))
