@@ -1,5 +1,5 @@
 
-(eval-when (:compile-toplevel :load-toplevel)
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (ql:quickload :rutilsx)
   (ql:quickload :cl-ana))
 
@@ -8,8 +8,8 @@
 (cl-ana.gmath:use-gmath *package*)
 (use-package :cl-ana)
 
-(defparameter *x* (variable 'integer))
-(defparameter *y* (variable 'integer))
+(defparameter *x* (variable 'integer :name :x))
+(defparameter *y* (variable 'integer :name :y))
 
 (defparameter *input* (variable '(array float (80 80 3))))
 (defparameter *kernel1* (variable '(array float (7 7 3 20))))
@@ -29,6 +29,7 @@
 #-(and)
 (defparameter *error* (- *model* *y*))
 
+#-(and)
 (run *model* (env *x* image))
 
 #-(and)
@@ -42,7 +43,8 @@
           (dataset *x* images *y* classifications)
           (list *kernel1* *kernel2* *h1* *h2*))
 
-(defclass graph-node () ())
+(defclass graph-node ()
+  ((name :reader name :initform nil :initarg :name)))
 
 (defun env (&rest env-alist)
   (loop
@@ -97,8 +99,8 @@
 (defclass graph-variable (graph-node)
   ((output-type :initarg :output-type :reader output-type)))
 
-(defun variable (type)
-  (make-instance 'graph-variable :output-type type))
+(defun variable (type &key name)
+  (make-instance 'graph-variable :output-type type :name name))
 
 (defmethod gradient-internal ((v graph-variable) dv env cache)
   (declare (ignore v dv env cache))
@@ -156,7 +158,7 @@
         (unary-sub (run-internal (car inputs) env cache)))))
 
 (defmethod gradient-internal ((s subtraction) b env cache)
-  (reduce #'sub (slot-value :key (lambda (i) (gradient-internal i b env cache)))))
+  (reduce #'sub (slot-value s 'inputs) :key (lambda (i) (gradient-internal i b env cache))))
 
 (defmethod sub ((x graph-node) y)
   (make-instance 'subtraction :inputs (list x y)))
@@ -178,7 +180,33 @@
         (reduce #'div inputs :key (lambda (i) (run-internal i env cache)))
         (unary-div (run-internal (car inputs) env cache)))))
 
-(defmethod gradient-internal ((a division) b env cache)
-  (reduce #'div (slot-value s 'inputs) :key (lambda (i) (gradient-internal i b env cache))))
+(defmethod gradient-internal ((d division) b env cache)
+  (reduce #'div (slot-value d 'inputs) :key (lambda (i) (gradient-internal i b env cache))))
+
+(defmethod print-object :around ((o simple-math-node) stream)
+  (declare (stream stream))
+  (if *print-escape*
+      (format stream "#<~A>" o)
+      (call-next-method)))
+
+(defmethod print-object ((v graph-variable) stream)
+  (declare (stream stream))
+  (format stream "#<~A>" (slot-value v 'name)))
+
+(defmethod print-object ((a addition) stream)
+  (declare (stream stream))
+  (format stream "~A" (cons "+" (slot-value a 'inputs))))
+
+(defmethod print-object ((s subtraction) stream)
+  (declare (stream stream))
+  (format stream "~A" (cons "-" (slot-value s 'inputs))))
+
+(defmethod print-object ((m multiplication) stream)
+  (declare (stream stream))
+  (format stream "~A" (cons "*" (slot-value m 'inputs))))
+
+(defmethod print-object ((d division) stream)
+  (declare (stream stream))
+  (format stream "~A" (cons "/" (slot-value d 'inputs))))
 
 ;; (+ (* (run a) (gradient v b)) (* (run b) (gradient v a)))
